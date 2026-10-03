@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#6d4aff"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="./manifest.json"><title>PhotoBeat Simple</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f5f8;color:#16181d;font-family:Arial,system-ui,sans-serif}.app{max-width:900px;margin:auto;padding:18px}.card{background:#fff;border-radius:18px;padding:18px;box-shadow:0 5px 25px #00000012}h1{margin:0 0 5px;font-size:25px}.sub{color:#666;font-size:14px;margin-bottom:18px}label{display:block;font-weight:700;margin:14px 0 7px}input[type=file]{width:100%;padding:10px;border:1px solid #ddd;border-radius:10px;background:#fff}audio{width:100%;margin-top:8px}.info{font-size:14px;color:#666;margin:10px 0;line-height:1.5}button{padding:12px 16px;border:0;border-radius:10px;background:#6d4aff;color:white;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}.secondary{background:white;color:#222;border:1px solid #ddd}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.preview{margin:18px auto 0;background:#111;border-radius:14px;aspect-ratio:9/16;max-height:650px;max-width:366px;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative}.preview img{width:100%;height:100%;object-fit:cover}.count{position:absolute;right:10px;top:10px;background:#000a;color:#fff;padding:6px 9px;border-radius:20px;font-size:12px}.photos{display:grid;grid-template-columns:repeat(8,1fr);gap:5px;margin-top:12px}.photos img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px}.progress{height:8px;background:#ddd;border-radius:20px;margin-top:14px;overflow:hidden}.progress div{height:100%;width:0;background:#6d4aff}.status{font-size:13px;color:#555;margin-top:9px;min-height:20px}.hint{font-size:12px;color:#777;margin-top:5px}.install{display:none;margin-top:10px}.ok{color:#16823b}.bad{color:#b3261e}@media(max-width:600px){.photos{grid-template-columns:repeat(5,1fr)}}
+</style>
+</head><body><div class="app"><div class="card">
+<h1>🎬 PhotoBeat Simple</h1><div class="sub">Photos + chanson → vidéo verticale plein écran compatible WhatsApp.</div>
+<label>1. Sélectionner les photos</label><input id="photos" type="file" accept="image/*" multiple><div class="hint">Tu peux sélectionner plusieurs fois. Les mêmes images peuvent être ajoutées plusieurs fois.</div>
+<label>2. Sélectionner la chanson</label><input id="audioFile" type="file" accept="audio/*"><audio id="audio" controls></audio>
+<div class="info" id="info">Sélectionne les photos et la chanson.</div>
+<div class="row"><button id="previewBtn" class="secondary" disabled>▶ Aperçu</button><button id="generateBtn" disabled>🎬 Générer la vidéo</button><button id="mp4Btn" class="secondary" style="display:none">📱 Convertir en MP4</button><button id="retryBtn" class="secondary" style="display:none">🔄 Réessayer</button><button id="resumeBtn" class="secondary" style="display:none">▶ Reprendre</button><button id="clearBtn" class="secondary">Effacer</button><button id="installBtn" class="secondary install">📲 Installer l'application</button></div>
+<div class="preview"><img id="previewImage" style="display:none"><div id="empty" style="color:#aaa">Aucun aperçu</div><div class="count" id="count">0 / 0</div></div><div class="photos" id="photoGrid"></div><div class="progress"><div id="progress"></div></div><div class="status" id="status"></div><div id="videoActions" style="display:none;margin-top:10px"></div>
+<div class="hint">La conversion MP4 utilise un convertisseur WebAssembly. Après le premier chargement, l'application peut réutiliser les fichiers mis en cache.</div>
+</div></div>
+<script>
+const $=id=>document.getElementById(id);let files=[],urls=[],audioURL=null,current=0,timer=null,playing=false;let ffmpegInstance=null,generationRunning=false,lastStage='',lastWebM=null;
+const DB='PhotoBeatDB', STORE='jobs', JOB='latest';
+function formatTime(s){if(!Number.isFinite(s)||s<=0)return '—';let m=Math.floor(s/60),sec=Math.round(s%60);return m+' min '+sec+' s'}
+function update(){const n=files.length,d=$('audio').duration;$('generateBtn').disabled=!(n&&Number.isFinite(d)&&d>0);$('previewBtn').disabled=!(n&&Number.isFinite(d)&&d>0);$('count').textContent=n?((current%n)+1)+' / '+n:'0 / 0';if(n&&Number.isFinite(d)&&d>0)$('info').textContent='Audio : '+formatTime(d)+' • '+n+' photo(s) • chaque photo ≈ '+(d/n).toFixed(2)+' s.';else if(n)$('info').textContent=n+' photo(s) sélectionnée(s). Sélectionne maintenant une chanson.';else $('info').textContent='Sélectionne les photos et la chanson.'}
+function addFile(file,label){files.push(file);const u=URL.createObjectURL(file);urls.push(u);const im=document.createElement('img');im.src=u;im.title=label||file.name;$('photoGrid').appendChild(im)}
+$('photos').onchange=e=>{[...e.target.files].forEach(f=>addFile(f,f.name));e.target.value='';current=0;show();update();$('status').textContent=files.length+' photo(s) sélectionnée(s). Tu peux encore en ajouter.'};
+$('audioFile').onchange=e=>{const f=e.target.files[0];if(!f)return;if(audioURL)URL.revokeObjectURL(audioURL);audioURL=URL.createObjectURL(f);$('audio').src=audioURL;$('audio').load();$('status').textContent='Chargement de la chanson…';clearJob()};
+$('audio').onloadedmetadata=()=>{update();$('status').textContent='Chanson prête.'};
+function show(){if(!files.length){$('previewImage').style.display='none';$('empty').style.display='block';update();return}$('empty').style.display='none';$('previewImage').style.display='block';$('previewImage').src=urls[current];update()}
+$('previewBtn').onclick=async()=>{if(playing){playing=false;clearInterval(timer);$('audio').pause();$('previewBtn').textContent='▶ Aperçu';return}if(!files.length||!$('audio').duration)return;playing=true;$('previewBtn').textContent='⏸ Pause';current=0;show();$('audio').currentTime=0;try{await $('audio').play()}catch(e){}const each=$('audio').duration/files.length;timer=setInterval(()=>{current++;if(current>=files.length){current=files.length-1;show();return}show()},each*1000)};
+$('audio').onended=()=>{playing=false;clearInterval(timer);$('previewBtn').textContent='▶ Aperçu';current=0;show()};
+$('clearBtn').onclick=()=>{playing=false;clearInterval(timer);files=[];urls.forEach(u=>URL.revokeObjectURL(u));urls=[];current=0;if(audioURL)URL.revokeObjectURL(audioURL);audioURL=null;$('audio').removeAttribute('src');$('audio').load();$('photoGrid').innerHTML='';$('progress').style.width='0';$('status').textContent='';$('retryBtn').style.display='none';$('resumeBtn').style.display='none';clearJob();show();update()};
+function loadImage(file){return new Promise((resolve,reject)=>{const im=new Image(),u=URL.createObjectURL(file);im.onload=()=>{im._url=u;resolve(im)};im.onerror=()=>{URL.revokeObjectURL(u);reject(new Error('Image illisible : '+file.name))};im.src=u})}
+function drawCover(ctx,img,w,h){ctx.fillStyle='#000';ctx.fillRect(0,0,w,h);const r=Math.max(w/img.naturalWidth,h/img.naturalHeight),nw=img.naturalWidth*r,nh=img.naturalHeight*r;ctx.drawImage(img,(w-nw)/2,(h-nh)/2,nw,nh)}
+function openDB(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB,1);r.onupgradeneeded=()=>r.result.createObjectStore(STORE);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
+async function saveJob(blob,meta){const db=await openDB();await new Promise((res,rej)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put({blob,meta},JOB);tx.oncomplete=res;tx.onerror=()=>rej(tx.error)});db.close()}
+async function getJob(){try{const db=await openDB();const out=await new Promise((res,rej)=>{const tx=db.transaction(STORE,'readonly');const r=tx.objectStore(STORE).get(JOB);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});db.close();return out}catch(e){return null}}
+async function clearJob(){try{const db=await openDB();const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).delete(JOB);tx.oncomplete=()=>db.close()}catch(e){}}
+async function checkNetwork(){if(!navigator.onLine)return false;try{await fetch('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/package.json',{method:'HEAD',cache:'no-store'});return true}catch(e){return false}}
+async function getFFmpeg(){if(ffmpegInstance)return ffmpegInstance;$('status').textContent='Téléchargement du convertisseur MP4… garde l’application ouverte.';const mod=await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/+esm');const util=await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/+esm');const {FFmpeg}=mod;const {toBlobURL,fetchFile}=util;const ff=new FFmpeg();ff.on('progress',p=>{$('progress').style.width=(88+p.progress*12)+'%'});const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';await ff.load({coreURL:await toBlobURL(base+'/ffmpeg-core.js','text/javascript'),wasmURL:await toBlobURL(base+'/ffmpeg-core.wasm','application/wasm')});ffmpegInstance={ff,fetchFile};return ffmpegInstance}
+async function makeWebM(){const W=720,H=1280,canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;const ctx=canvas.getContext('2d');const stream=canvas.captureStream(30);const AC=window.AudioContext||window.webkitAudioContext;if(!AC)throw new Error('AudioContext non disponible sur ce navigateur.');const ac=new AC();const dest=ac.createMediaStreamDestination();const source=ac.createMediaElementSource($('audio'));source.connect(dest);source.connect(ac.destination);dest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')?'video/webm;codecs=vp9,opus':'video/webm';const rec=new MediaRecorder(stream,{mimeType:mime});let chunks=[];rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};const stopped=new Promise(r=>rec.onstop=r);rec.start(200);const total=$('audio').duration,each=total/files.length*1000;$('audio').currentTime=0;await $('audio').play();for(let i=0;i<files.length;i++){const img=await loadImage(files[i]);const start=performance.now();while(performance.now()-start<each){drawCover(ctx,img,W,H);$('progress').style.width=((i+(performance.now()-start)/each)/files.length*85)+'%';await new Promise(r=>requestAnimationFrame(r))}URL.revokeObjectURL(img._url)}$('audio').pause();rec.stop();await stopped;stream.getTracks().forEach(t=>t.stop());await ac.close();return new Blob(chunks,{type:'video/webm'})}
+async function convertMP4(webm,total){lastStage='mp4';$('status').textContent='Conversion MP4…';$('progress').style.width='88%';const {ff,fetchFile}=await getFFmpeg();await ff.writeFile('input.webm',await fetchFile(webm));await ff.exec(['-i','input.webm','-c:v','libx264','-preset','veryfast','-crf','23','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-movflags','+faststart','output.mp4']);const data=await ff.readFile('output.mp4');const mp4=new Blob([data.buffer],{type:'video/mp4'});const u=URL.createObjectURL(mp4),a=document.createElement('a');a.href=u;a.download='PhotoBeat-Reel-WhatsApp-'+Date.now()+'.mp4';a.click();setTimeout(()=>URL.revokeObjectURL(u),30000);$('progress').style.width='100%';$('status').textContent='✅ MP4 terminé : '+formatTime(total)+' • '+files.length+' images • 9:16 • prêt pour WhatsApp';await clearJob()}
+function offerVideo(webm,total){
+  lastWebM=webm;
+  const u=URL.createObjectURL(webm);
+  const box=$('videoActions'); box.style.display='block';
+  box.innerHTML='<div style="padding:12px;border:1px solid #ddd;border-radius:12px;background:#fafafa">'+
+    '<b>✅ Vidéo générée !</b><div style="font-size:13px;color:#666;margin:6px 0 10px">La vidéo est prête. Veux-tu aussi la convertir en MP4 pour WhatsApp ?</div>'+ 
+    '<div class="row" style="margin-top:0"><a id="downloadWebM" class="secondary" style="text-decoration:none;padding:12px 16px;border-radius:10px;border:1px solid #ddd;background:#fff;color:#222;font-weight:700" download="PhotoBeat-Reel.webm" href="'+u+'">⬇️ Télécharger la vidéo</a><button id="acceptMp4">Oui, convertir en MP4</button><button id="refuseMp4" class="secondary">Non, garder la vidéo</button></div></div>';
+  $('acceptMp4').onclick=async()=>{ $('mp4Btn').style.display='none'; $('acceptMp4').disabled=true; $('refuseMp4').disabled=true; await startMP4(webm,total); };
+  $('refuseMp4').onclick=()=>{ $('status').textContent='✅ Vidéo conservée sans conversion MP4. Tu peux la télécharger ci-dessus.'; $('refuseMp4').disabled=true; $('acceptMp4').disabled=true; };
+}
+async function startMP4(webm,total){
+  if(generationRunning)return;
+  generationRunning=true; lastStage='mp4'; $('retryBtn').style.display='none';
+  try{await convertMP4(webm,total);}
+  catch(err){console.error(err);$('retryBtn').style.display='inline-block';$('status').textContent='❌ Conversion MP4 interrompue. La vidéo reste disponible. Appuie sur Réessayer.';}
+  finally{generationRunning=false;}
+}
+async function generate(){
+  if(generationRunning||!files.length||!$('audio').duration)return;
+  generationRunning=true;$('generateBtn').disabled=true;$('previewBtn').disabled=true;$('retryBtn').style.display='none';$('resumeBtn').style.display='none';$('mp4Btn').style.display='none';$('videoActions').style.display='none';
+  try{
+    let job=await getJob();
+    if(job&&job.blob){lastWebM=job.blob;$('status').textContent='🔄 Une vidéo déjà générée est disponible. Choisis si tu veux la convertir en MP4.';offerVideo(job.blob,job.meta.total);return;}
+    lastStage='record';$('status').textContent='Génération de la vidéo…';$('progress').style.width='0';
+    const total=$('audio').duration;const webm=await makeWebM();await saveJob(webm,{total});
+    $('progress').style.width='100%';$('status').textContent='✅ Génération terminée.';offerVideo(webm,total);
+  }catch(err){console.error(err);$('retryBtn').style.display='inline-block';const msg=err&&err.message?err.message:'Erreur inconnue';$('status').textContent='❌ Génération interrompue. Appuie sur Réessayer. ('+msg.slice(0,100)+')'}
+  finally{generationRunning=false;$('generateBtn').disabled=false;$('previewBtn').disabled=false;}
+}
+$('generateBtn').onclick=generate;
+$('retryBtn').onclick=async()=>{
+  const job=await getJob();
+  if(job&&job.blob){$('retryBtn').style.display='none';$('status').textContent='🔄 Vidéo récupérée. Choisis si tu veux convertir en MP4.';offerVideo(job.blob,job.meta.total);return;}
+  $('retryBtn').style.display='none';await generate();
+};
+$('resumeBtn').onclick=async()=>{const job=await getJob();if(job&&job.blob)offerVideo(job.blob,job.meta.total);};
+(async()=>{const j=await getJob();if(j&&j.blob){$('resumeBtn').style.display='inline-block';$('status').textContent='🔄 Une vidéo générée précédemment est disponible. Appuie sur Reprendre.'}})();
+let deferredPrompt=null;window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;$('installBtn').style.display='inline-block'});$('installBtn').onclick=async()=>{if(deferredPrompt){deferredPrompt.prompt();await deferredPrompt.userChoice;deferredPrompt=null;$('installBtn').style.display='none'}else alert('Pour installer PhotoBeat, ouvre cette application depuis Chrome sur une adresse HTTPS, puis choisis « Ajouter à l’écran d’accueil ».');};
+window.addEventListener('online',()=>{if($('status').textContent.includes('Connexion absente'))$('status').textContent='✅ Connexion revenue. Tu peux réessayer.'});
+show();update();if('serviceWorker' in navigator && location.protocol!=='file:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
+</script></body></html>
